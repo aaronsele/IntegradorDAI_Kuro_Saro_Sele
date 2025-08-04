@@ -157,7 +157,7 @@ export const createEventLocation = async (req, res) => {
             });
         }
 
-   
+    
         const locationResult = await pool.query('SELECT id FROM Locations WHERE id = $1', [id_location]);
 
         if (locationResult.rowCount === 0) {
@@ -167,7 +167,6 @@ export const createEventLocation = async (req, res) => {
             });
         }
 
-    
         const result = await pool.query(`
             INSERT INTO Event_Locations (id_location, name, full_address, max_capacity, 
                                        latitude, longitude, id_creator_user)
@@ -200,7 +199,7 @@ export const updateEventLocation = async (req, res) => {
     const userId = req.user.id;
 
     try {
-        
+      
         const checkResult = await pool.query('SELECT id_creator_user FROM Event_Locations WHERE id = $1', [id]);
 
         if (checkResult.rowCount === 0) {
@@ -217,7 +216,7 @@ export const updateEventLocation = async (req, res) => {
             });
         }
 
-     
+       
         if (updateData.name && updateData.name.length < 3) {
             return res.status(StatusCodes.BAD_REQUEST).json({
                 success: false,
@@ -239,7 +238,7 @@ export const updateEventLocation = async (req, res) => {
             });
         }
 
-  
+        
         const updateFields = [];
         const values = [];
         let paramCount = 0;
@@ -285,7 +284,7 @@ export const deleteEventLocation = async (req, res) => {
     const userId = req.user.id;
 
     try {
-      
+       
         const checkResult = await pool.query('SELECT id_creator_user FROM Event_Locations WHERE id = $1', [id]);
 
         if (checkResult.rowCount === 0) {
@@ -302,7 +301,7 @@ export const deleteEventLocation = async (req, res) => {
             });
         }
 
-       
+        
         const eventsResult = await pool.query('SELECT COUNT(*) FROM Events WHERE id_event_location = $1', [id]);
 
         if (parseInt(eventsResult.rows[0].count) > 0) {

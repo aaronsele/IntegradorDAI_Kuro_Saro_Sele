@@ -1,36 +1,41 @@
 import pkg from 'pg';
 import { StatusCodes } from 'http-status-codes';
-import {validaciones} from '../validaciones/stringValidacion.js'
+import { validaciones } from '../helpers/validaciones/validaciones-helper.js';
+import config from '../../configs/db-configs.js';
+
+const { Pool } = pkg;
+const pool = new Pool(config);
+const validacionesInstance = new validaciones();
 
 export const getHello = (req, res) => {
     res.json({ message: 'Hola desde la API 🚀' });
 };
 
-// 2) +  3) 
+
 export const getAllEvents = async (req, res) => {
     const { page = 1, limit = 15, name, startdate, tag } = req.query;
     const offset = (page - 1) * limit;
     const client = pool;
     
     try {
-        await client.connect();
+       
         
         let sqlQuery = `
-             SELECT 
-    e.id, e.name, e.description, e.start_date, e.duration_in_minutes,
-    e.price, e.enabled_for_enrollment, e.max_assistance,
-    el.id AS event_location_id, el.name AS location_name, 
-    el.full_address, el.latitude, el.longitude, el.max_capacity,
-    l.id AS location_id, l.name AS locality_name,
-    p.id AS province_id, p.name AS province_name, p.full_name AS province_full_name,
-    u.id AS creator_id, u.first_name, u.last_name, u.username
-FROM events e
-LEFT JOIN event_locations el ON e.id_event_location = el.id
-LEFT JOIN locations l ON el.id_location = l.id
-LEFT JOIN provinces p ON l.id_province = p.id
-LEFT JOIN users u ON e.id_creator_user = u.id
-WHERE 1=1
-`;
+            SELECT 
+                e.id, e.name, e.description, e.start_date, e.duration_in_minutes,
+                e.price, e.enabled_for_enrollment, e.max_assistance,
+                el.id AS event_location_id, el.name AS location_name, 
+                el.full_address, el.latitude, el.longitude, el.max_capacity,
+                l.id AS location_id, l.name AS locality_name,
+                p.id AS province_id, p.name AS province_name, p.full_name AS province_full_name,
+                u.id AS creator_id, u.first_name, u.last_name, u.username
+            FROM events e
+            LEFT JOIN event_locations el ON e.id_event_location = el.id
+            LEFT JOIN locations l ON el.id_location = l.id
+            LEFT JOIN provinces p ON l.id_province = p.id
+            LEFT JOIN users u ON e.id_creator_user = u.id
+            WHERE 1=1
+        `;
         
         const values = [];
         let paramCount = 0;
@@ -58,6 +63,25 @@ WHERE 1=1
             values.push(`%${tag}%`);
         }
 
+       
+        const countQuery = sqlQuery.replace(/SELECT.*FROM/, 'SELECT COUNT(*) FROM');
+        const countResult = await client.query(countQuery, values);
+        
+      
+        if (!countResult.rows || countResult.rows.length === 0) {
+            return res.status(StatusCodes.OK).json({
+                collection: [],
+                pagination: {
+                    limit: parseInt(limit),
+                    offset: offset,
+                    nextPage: null,
+                    total: "0"
+                }
+            });
+        }
+        
+        const total = parseInt(countResult.rows[0]?.count || 0);
+
       
         paramCount++;
         sqlQuery += ` ORDER BY e.id ASC LIMIT $${paramCount} OFFSET $${paramCount + 1}`;
@@ -65,14 +89,20 @@ WHERE 1=1
 
         const result = await client.query(sqlQuery, values);
 
-
+       
         if (result.rows.length === 0) {
             return res.status(StatusCodes.OK).json({
                 collection: [],
-                message: 'No hay eventos registrados en la base de datos.'
+                pagination: {
+                    limit: parseInt(limit),
+                    offset: offset,
+                    nextPage: null,
+                    total: total.toString()
+                }
             });
         }
 
+    
         const eventsWithTags = await Promise.all(
             result.rows.map(async (event) => {
                 const tagsQuery = `
@@ -90,40 +120,53 @@ WHERE 1=1
                     start_date: event.start_date,
                     duration_in_minutes: event.duration_in_minutes,
                     price: event.price,
-                    enabled_for_enrollment: event.enabled_for_enrollment === '1',
+                    enabled_for_enrollment: event.enabled_for_enrollment,
                     max_assistance: event.max_assistance,
+                    id_creator_user: event.creator_id,
                     event_location: {
                         id: event.event_location_id,
+                        id_location: event.location_id,
                         name: event.location_name,
                         full_address: event.full_address,
-                        latitude: parseFloat(event.latitude),
-                        longitude: parseFloat(event.longitude),
                         max_capacity: event.max_capacity,
+                        latitude: event.latitude,
+                        longitude: event.longitude,
+                        id_creator_user: event.creator_id,
                         location: {
                             id: event.location_id,
                             name: event.locality_name,
-                            latitude: parseFloat(event.latitude),
-                            longitude: parseFloat(event.longitude),
+                            id_province: event.province_id,
+                            latitude: event.latitude,
+                            longitude: event.longitude,
                             province: {
                                 id: event.province_id,
                                 name: event.province_name,
-                                full_name: event.province_full_name
+                                full_name: event.province_full_name,
+                                latitude: null,
+                                longitude: null,
+                                display_order: null
                             }
+                        },
+                        creator_user: {
+                            id: event.creator_id,
+                            first_name: event.first_name,
+                            last_name: event.last_name,
+                            username: event.username,
+                            password: '******'
                         }
                     },
+                    tags: tagsResult.rows,
                     creator_user: {
                         id: event.creator_id,
-                        username: event.username,
                         first_name: event.first_name,
-                        last_name: event.last_name
-                    },
-                    tags: tagsResult.rows
+                        last_name: event.last_name,
+                        username: event.username,
+                        password: '******'
+                    }
                 };
             })
         );
 
-        
-        
         const nextPage = offset + limit < total ? page + 1 : null;
 
         res.status(StatusCodes.OK).json({
@@ -138,12 +181,6 @@ WHERE 1=1
 
     } catch (error) {
         console.error('Error obteniendo eventos:', error);
-        if (error.code === 'ECONNREFUSED' || error.message.includes('connect') || error.message.includes('Connection')) {
-            return res.status(StatusCodes.INTERNAL_SERVER_ERROR).json({
-                success: false,
-                message: 'Error de conexión con la base de datos'
-            });
-        }
         res.status(StatusCodes.INTERNAL_SERVER_ERROR).json({
             success: false,
             message: 'Error interno del servidor'
@@ -153,20 +190,25 @@ WHERE 1=1
 
 
 
-// 4)
+
 export const getEventById = async (req, res) => {
     const { id } = req.params;
     const client = pool;
 
-
     try {
-        await client.connect();
+    
         
         const sqlQuery = `
             SELECT 
-                e.*, el.*, l.*, p.*, u.* 
+                e.id, e.name, e.description, e.id_event_location, e.start_date, 
+                e.duration_in_minutes, e.price, e.enabled_for_enrollment, e.max_assistance, e.id_creator_user,
+                el.id AS event_location_id, el.name AS location_name, el.full_address, 
+                el.max_capacity, el.latitude, el.longitude, el.id_creator_user AS location_creator_user,
+                l.id AS location_id, l.name AS locality_name, l.id_province,
+                p.id AS province_id, p.name AS province_name, p.full_name AS province_full_name,
+                u.id AS creator_id, u.first_name, u.last_name, u.username
             FROM Events e
-            LEFT JOIN event_Locations el ON e.id_event_location = el.id
+            LEFT JOIN event_locations el ON e.id_event_location = el.id
             LEFT JOIN locations l ON el.id_location = l.id
             LEFT JOIN provinces p ON l.id_province = p.id
             LEFT JOIN users u ON e.id_creator_user = u.id
@@ -176,16 +218,13 @@ export const getEventById = async (req, res) => {
         const result = await client.query(sqlQuery, [id]);
 
         try{
-            chequearSiExiste(result, "Evento");
-
+            await validacionesInstance.chequearSiExiste(result, "Evento");
         }catch(error){
             return res.status(StatusCodes.NOT_FOUND).json({
                 success: false,
-                message:error.message
+                message: error.message
             });
         }
-
-   
 
         const event = result.rows[0];
 
@@ -198,8 +237,9 @@ export const getEventById = async (req, res) => {
         `;
         const tagsResult = await client.query(tagsQuery, [id]);
 
+        
         const locationCreatorQuery = 'SELECT id, first_name, last_name, username FROM Users WHERE id = $1';
-        const locationCreatorResult = await client.query(locationCreatorQuery, [event.id_creator_user]);
+        const locationCreatorResult = await client.query(locationCreatorQuery, [event.location_creator_user]);
 
         const eventDetail = {
             id: event.id,
@@ -214,13 +254,13 @@ export const getEventById = async (req, res) => {
             id_creator_user: event.id_creator_user,
             event_location: {
                 id: event.event_location_id,
-                id_location: event.id_location,
+                id_location: event.location_id,
                 name: event.location_name,
                 full_address: event.full_address,
                 max_capacity: event.max_capacity,
                 latitude: event.latitude,
                 longitude: event.longitude,
-                id_creator_user: event.id_creator_user,
+                id_creator_user: event.location_creator_user,
                 location: {
                     id: event.location_id,
                     name: event.locality_name,
@@ -231,12 +271,18 @@ export const getEventById = async (req, res) => {
                         id: event.province_id,
                         name: event.province_name,
                         full_name: event.province_full_name,
-                        latitude: event.province_latitude,
-                        longitude: event.province_longitude,
-                        display_order: event.display_order
+                        latitude: null,
+                        longitude: null,
+                        display_order: null
                     }
                 },
-                creator_user: locationCreatorResult.rows[0]
+                creator_user: {
+                    id: locationCreatorResult.rows[0]?.id,
+                    first_name: locationCreatorResult.rows[0]?.first_name,
+                    last_name: locationCreatorResult.rows[0]?.last_name,
+                    username: locationCreatorResult.rows[0]?.username,
+                    password: '******'
+                }
             },
             tags: tagsResult.rows,
             creator_user: {
@@ -256,10 +302,10 @@ export const getEventById = async (req, res) => {
             success: false,
             message: 'Error interno del servidor'
         });
-    } 
+    }
 };
 
-// 6) POST Y PUT
+
 export const createEvent = async (req, res) => {
     const { 
         name, description, id_event_location, start_date, 
@@ -271,37 +317,41 @@ export const createEvent = async (req, res) => {
 
     try {
        
-        isValidString(name, "nombre")
-        isValidString(description, "descripción")
-        isPositivo(price, "precio")
-        isPositivo(duration_in_minutes, "duración")
+        try {
+            await validacionesInstance.isValidString(name, "nombre");
+            await validacionesInstance.isValidString(description, "descripción");
+            await validacionesInstance.isPositivo(price, "precio");
+            await validacionesInstance.isPositivo(duration_in_minutes, "duración");
+        } catch (error) {
+            return res.status(StatusCodes.BAD_REQUEST).json({
+                success: false,
+                message: error.message
+            });
+        }
 
-        await client.connect();
+   
 
+       
         const locationQuery = 'SELECT max_capacity FROM Event_Locations WHERE id = $1';
         const locationResult = await client.query(locationQuery, [id_event_location]);
         
         try{
-            chequearSiExiste(locationResult, "ubicación");
-
+            await validacionesInstance.chequearSiExiste(locationResult, "ubicación");
         }catch(error){
             return res.status(StatusCodes.NOT_FOUND).json({
                 success: false,
-                message:error.message
+                message: error.message
             });
         }
+
         if (max_assistance > locationResult.rows[0].max_capacity) {
             return res.status(StatusCodes.BAD_REQUEST).json({
                 success: false,
                 message: 'La capacidad máxima excede la capacidad de la ubicación'
             });
         }
-        if(!userId){
-            return res.status(StatusCodes.UNAUTHORIZED).json({
-                success: false,
-                message: 'Error: el usuario no se encuentra autenticado'
-            });
-        }
+
+      
         const insertQuery = `
             INSERT INTO Events (name, description, id_event_location, start_date, 
                               duration_in_minutes, price, enabled_for_enrollment, 
@@ -318,7 +368,28 @@ export const createEvent = async (req, res) => {
 
         const eventId = eventResult.rows[0].id;
 
-    
+        
+        if (tags && tags.length > 0) {
+            for (const tagName of tags) {
+               
+                let tagQuery = 'SELECT id FROM Tags WHERE name = $1';
+                let tagResult = await client.query(tagQuery, [tagName]);
+                
+                let tagId;
+                if (tagResult.rowCount === 0) {
+                    const createTagQuery = 'INSERT INTO Tags (name) VALUES ($1) RETURNING id';
+                    const newTagResult = await client.query(createTagQuery, [tagName]);
+                    tagId = newTagResult.rows[0].id;
+                } else {
+                    tagId = tagResult.rows[0].id;
+                }
+
+                
+                const eventTagQuery = 'INSERT INTO Event_Tags (id_event, id_tag) VALUES ($1, $2)';
+                await client.query(eventTagQuery, [eventId, tagId]);
+            }
+        }
+
         res.status(StatusCodes.CREATED).json({
             success: true,
             message: 'Evento creado exitosamente',
@@ -331,71 +402,135 @@ export const createEvent = async (req, res) => {
             success: false,
             message: 'Error interno del servidor'
         });
-    } 
+    }
 };
 
 
 export const updateEvent = async (req, res) => {
-    const { idEvento } = req.params;
+    const { id } = req.params;
     const updateData = req.body;
     const userId = req.user.id;
     const client = pool;
-
+   
+    
     try {
-        await client.connect();
-
+        
+     
         const checkQuery = 'SELECT id_creator_user FROM Events WHERE id = $1';
-        const checkResult = await client.query(checkQuery, [idEvento]);
+        const checkResult = await client.query(checkQuery, [id]);
         
         try{
-            chequearSiExiste(checkResult, "Evento")
-
+            await validacionesInstance.chequearSiExiste(checkResult, "Evento");
         }catch(error){
             return res.status(StatusCodes.NOT_FOUND).json({
                 success: false,
-                message:error.message
+                message: error.message
             });
         }
 
-   
         if (checkResult.rows[0].id_creator_user !== userId) {
-            return res.status(StatusCodes.NOT_FOUND).json({
+            return res.status(StatusCodes.FORBIDDEN).json({
                 success: false,
                 message: 'No tienes permisos para editar este evento'
             });
         }
 
-        isValidString(updateData.name,"nombre")
-        isValidString(updateData.description,"descripción")
-
-        isPositivo(updateData.price,"precio")
-        isPositivo(updateData.duration_in_minutes,"duración")
-
-
+   
         const updateFields = [];
         const values = [];
-        let paramCount = 0;
+        let paramCount = 1;
 
-        Object.keys(updateData).forEach(key => {
-            if (key !== 'id' && key !== 'id_creator_user' && key !== 'tags') {
-                paramCount++;
-                updateFields.push(`${key} = $${paramCount}`);
-                values.push(updateData[key]);
+        if (updateData.name) {
+            try {
+                await validacionesInstance.isValidString(updateData.name, "nombre");
+            } catch (error) {
+                return res.status(StatusCodes.BAD_REQUEST).json({
+                    success: false,
+                    message: error.message
+                });
             }
-        });
+            updateFields.push(`name = $${paramCount}`);
+            values.push(updateData.name);
+            paramCount++;
+        }
+
+        if (updateData.description) {
+            try {
+                await validacionesInstance.isValidString(updateData.description, "descripción");
+            } catch (error) {
+                return res.status(StatusCodes.BAD_REQUEST).json({
+                    success: false,
+                    message: error.message
+                });
+            }
+            updateFields.push(`description = $${paramCount}`);
+            values.push(updateData.description);
+            paramCount++;
+        }
+
+        if (updateData.price !== undefined) {
+            try {
+                await validacionesInstance.isPositivo(updateData.price, "precio");
+            } catch (error) {
+                return res.status(StatusCodes.BAD_REQUEST).json({
+                    success: false,
+                    message: error.message
+                });
+            }
+            updateFields.push(`price = $${paramCount}`);
+            values.push(updateData.price);
+            paramCount++;
+        }
+
+        if (updateData.duration_in_minutes !== undefined) {
+            try {
+                await validacionesInstance.isPositivo(updateData.duration_in_minutes, "duración");
+            } catch (error) {
+                return res.status(StatusCodes.BAD_REQUEST).json({
+                    success: false,
+                    message: error.message
+                });
+            }
+            updateFields.push(`duration_in_minutes = $${paramCount}`);
+            values.push(updateData.duration_in_minutes);
+            paramCount++;
+        }
+
+        if (updateData.start_date) {
+            updateFields.push(`start_date = $${paramCount}`);
+            values.push(updateData.start_date);
+            paramCount++;
+        }
+
+        if (updateData.enabled_for_enrollment !== undefined) {
+            updateFields.push(`enabled_for_enrollment = $${paramCount}`);
+            values.push(updateData.enabled_for_enrollment);
+            paramCount++;
+        }
+
+        if (updateData.max_assistance !== undefined) {
+            updateFields.push(`max_assistance = $${paramCount}`);
+            values.push(updateData.max_assistance);
+            paramCount++;
+        }
+
+        if (updateData.id_event_location) {
+            updateFields.push(`id_event_location = $${paramCount}`);
+            values.push(updateData.id_event_location);
+            paramCount++;
+        }
+
         if (updateFields.length === 0) {
             return res.status(StatusCodes.BAD_REQUEST).json({
                 success: false,
-                message: 'No hay campos válidos para actualizar'
+                message: 'No se proporcionaron campos para actualizar'
             });
         }
 
-        paramCount++;
-        values.push(idEvento);
-
+        values.push(id);
         const updateQuery = `UPDATE Events SET ${updateFields.join(', ')} WHERE id = $${paramCount}`;
+        
         await client.query(updateQuery, values);
-
 
         res.status(StatusCodes.OK).json({
             success: true,
@@ -411,58 +546,50 @@ export const updateEvent = async (req, res) => {
     }
 };
 
-// 6 DELETE
+
 export const deleteEvent = async (req, res) => {
-    const { idEvento } = req.params;
+    const { id } = req.params;
     const userId = req.user.id;
     const client = pool;
 
     try {
-        await client.connect();
-
+        
 
         const checkQuery = 'SELECT id_creator_user FROM Events WHERE id = $1';
-        const checkResult = await client.query(checkQuery, [idEvento]);
-       
-        if(!userId){
-            return res.status(StatusCodes.UNAUTHORIZED).json({
-                success: false,
-                message: 'Error: el usuario no se encuentra autenticado'
-            });
-        }
+        const checkResult = await client.query(checkQuery, [id]);
+        
         try{
-            chequearSiExiste(checkResult, "Evento")
-
+            await validacionesInstance.chequearSiExiste(checkResult, "Evento");
         }catch(error){
             return res.status(StatusCodes.NOT_FOUND).json({
                 success: false,
-                message:error.message
+                message: error.message
             });
         }
-      
+
         if (checkResult.rows[0].id_creator_user !== userId) {
-            return res.status(StatusCodes.NOT_FOUND).json({
+            return res.status(StatusCodes.FORBIDDEN).json({
                 success: false,
                 message: 'No tienes permisos para eliminar este evento'
             });
         }
-        
 
+     
         const enrollmentQuery = 'SELECT COUNT(*) FROM Event_Enrollments WHERE id_event = $1';
-        const enrollmentResult = await client.query(enrollmentQuery, [idEvento]);
-
+        const enrollmentResult = await client.query(enrollmentQuery, [id]);
+        
         if (parseInt(enrollmentResult.rows[0].count) > 0) {
             return res.status(StatusCodes.BAD_REQUEST).json({
                 success: false,
-                message: 'No se puede eliminar un evento con usuarios registrados'
+                message: 'No se puede eliminar un evento que tiene inscripciones'
             });
         }
 
+        
+        await client.query('DELETE FROM Event_Tags WHERE id_event = $1', [id]);
 
-        await client.query('DELETE FROM Event_Tags WHERE id_event = $1', [idEvento]);
-
-
-        await client.query('DELETE FROM Events WHERE id = $1', [idEvento]);
+        
+        await client.query('DELETE FROM Events WHERE id = $1', [id]);
 
         res.status(StatusCodes.OK).json({
             success: true,
@@ -478,32 +605,32 @@ export const deleteEvent = async (req, res) => {
     }
 };
 
-// 7)
+
 export const enrollInEvent = async (req, res) => {
     const { id } = req.params;
     const userId = req.user.id;
     const client = pool;
 
     try {
-        await client.connect();
-
-  
+        
+       
         const eventQuery = `
             SELECT start_date, enabled_for_enrollment, max_assistance 
             FROM Events WHERE id = $1
         `;
         const eventResult = await client.query(eventQuery, [id]);
-
-        if (eventResult.rowCount === 0) {
+        
+        try{
+            await validacionesInstance.chequearSiExiste(eventResult, "Evento");
+        }catch(error){
             return res.status(StatusCodes.NOT_FOUND).json({
                 success: false,
-                message: 'Evento no encontrado'
+                message: error.message
             });
         }
 
         const event = eventResult.rows[0];
 
-  
         if (event.enabled_for_enrollment !== '1') {
             return res.status(StatusCodes.BAD_REQUEST).json({
                 success: false,
@@ -511,11 +638,8 @@ export const enrollInEvent = async (req, res) => {
             });
         }
 
-
-        const eventDate = new Date(event.start_date);
         const today = new Date();
-        today.setHours(0, 0, 0, 0);
-
+        const eventDate = new Date(event.start_date);
         if (eventDate <= today) {
             return res.status(StatusCodes.BAD_REQUEST).json({
                 success: false,
@@ -526,7 +650,7 @@ export const enrollInEvent = async (req, res) => {
   
         const existingEnrollmentQuery = 'SELECT id FROM Event_Enrollments WHERE id_event = $1 AND id_user = $2';
         const existingEnrollmentResult = await client.query(existingEnrollmentQuery, [id, userId]);
-
+        
         if (existingEnrollmentResult.rowCount > 0) {
             return res.status(StatusCodes.BAD_REQUEST).json({
                 success: false,
@@ -534,7 +658,7 @@ export const enrollInEvent = async (req, res) => {
             });
         }
 
-   
+     
         const currentEnrollmentsQuery = 'SELECT COUNT(*) FROM Event_Enrollments WHERE id_event = $1';
         const currentEnrollmentsResult = await client.query(currentEnrollmentsQuery, [id]);
         const currentEnrollments = parseInt(currentEnrollmentsResult.rows[0].count);
@@ -546,7 +670,7 @@ export const enrollInEvent = async (req, res) => {
             });
         }
 
-  
+   
         const enrollmentQuery = `
             INSERT INTO Event_Enrollments (id_event, id_user, registration_date_time)
             VALUES ($1, $2, NOW())
@@ -559,7 +683,7 @@ export const enrollInEvent = async (req, res) => {
         });
 
     } catch (error) {
-        console.error('Error en inscripción:', error);
+        console.error('Error inscribiendo al evento:', error);
         res.status(StatusCodes.INTERNAL_SERVER_ERROR).json({
             success: false,
             message: 'Error interno del servidor'
@@ -574,26 +698,26 @@ export const cancelEnrollment = async (req, res) => {
     const client = pool;
 
     try {
-        await client.connect();
+     
 
-        
+      
         const eventQuery = 'SELECT start_date FROM Events WHERE id = $1';
         const eventResult = await client.query(eventQuery, [id]);
-
-        if (eventResult.rowCount === 0) {
+        
+        try{
+            await validacionesInstance.chequearSiExiste(eventResult, "Evento");
+        }catch(error){
             return res.status(StatusCodes.NOT_FOUND).json({
                 success: false,
-                message: 'Evento no encontrado'
+                message: error.message
             });
         }
 
         const event = eventResult.rows[0];
 
-  
-        const eventDate = new Date(event.start_date);
-        const today = new Date();
-        today.setHours(0, 0, 0, 0);
 
+        const today = new Date();
+        const eventDate = new Date(event.start_date);
         if (eventDate <= today) {
             return res.status(StatusCodes.BAD_REQUEST).json({
                 success: false,
@@ -601,10 +725,10 @@ export const cancelEnrollment = async (req, res) => {
             });
         }
 
-      
+       
         const enrollmentQuery = 'SELECT id FROM Event_Enrollments WHERE id_event = $1 AND id_user = $2';
         const enrollmentResult = await client.query(enrollmentQuery, [id, userId]);
-
+        
         if (enrollmentResult.rowCount === 0) {
             return res.status(StatusCodes.BAD_REQUEST).json({
                 success: false,
@@ -612,7 +736,7 @@ export const cancelEnrollment = async (req, res) => {
             });
         }
 
-
+        
         await client.query('DELETE FROM Event_Enrollments WHERE id_event = $1 AND id_user = $2', [id, userId]);
 
         res.status(StatusCodes.OK).json({
@@ -632,64 +756,46 @@ export const cancelEnrollment = async (req, res) => {
 
 export const getEventParticipants = async (req, res) => {
     const { id } = req.params;
-    const { page = 1, limit = 15 } = req.query;
-    const offset = (page - 1) * limit;
     const client = pool;
 
     try {
-        await client.connect();
+        
 
        
         const eventQuery = 'SELECT id FROM Events WHERE id = $1';
         const eventResult = await client.query(eventQuery, [id]);
-
-        if (eventResult.rowCount === 0) {
+        
+        try{
+            await validacionesInstance.chequearSiExiste(eventResult, "Evento");
+        }catch(error){
             return res.status(StatusCodes.NOT_FOUND).json({
                 success: false,
-                message: 'Evento no encontrado'
+                message: error.message
             });
         }
 
-  
-        const countQuery = 'SELECT COUNT(*) FROM Event_Enrollments WHERE id_event = $1';
-        const countResult = await client.query(countQuery, [id]);
-        const total = parseInt(countResult.rows[0].count);
-
-
+       
         const participantsQuery = `
-            SELECT 
-                u.id, u.username, u.first_name, u.last_name,
-                ee.attended, ee.rating, ee.description
+            SELECT u.id, u.first_name, u.last_name, u.username, ee.registration_date_time
             FROM Event_Enrollments ee
             JOIN Users u ON ee.id_user = u.id
             WHERE ee.id_event = $1
             ORDER BY ee.registration_date_time ASC
-            LIMIT $2 OFFSET $3
         `;
-        const participantsResult = await client.query(participantsQuery, [id, limit, offset]);
+        const participantsResult = await client.query(participantsQuery, [id]);
 
-        const participants = participantsResult.rows.map(row => ({
-            user: {
-                id: row.id,
-                username: row.username,
-                first_name: row.first_name,
-                last_name: row.last_name
-            },
-            attended: row.attended,
-            rating: row.rating,
-            description: row.description
+        const participants = participantsResult.rows.map(participant => ({
+            id: participant.id,
+            first_name: participant.first_name,
+            last_name: participant.last_name,
+            username: participant.username,
+            password: '******',
+            registration_date_time: participant.registration_date_time
         }));
 
-        const nextPage = offset + limit < total ? page + 1 : null;
-
         res.status(StatusCodes.OK).json({
-            collection: participants,
-            pagination: {
-                limit: parseInt(limit),
-                offset: offset,
-                nextPage: nextPage,
-                total: total.toString()
-            }
+            success: true,
+            participants: participants
         });
 
     } catch (error) {
@@ -707,58 +813,341 @@ export const getEventByName = async (req, res) => {
     const client = pool;
 
     try {
-        await client.connect();
-        const sqlQuery = 'SELECT * FROM Events WHERE name = $1';
-        const values = [name];
-        const resultadoPg = await client.query(sqlQuery, values);
+    
+
+        const sqlQuery = `
+            SELECT 
+                e.id, e.name, e.description, e.start_date, e.duration_in_minutes,
+                e.price, e.enabled_for_enrollment, e.max_assistance,
+                el.id AS event_location_id, el.name AS location_name, 
+                el.full_address, el.latitude, el.longitude, el.max_capacity,
+                l.id AS location_id, l.name AS locality_name,
+                p.id AS province_id, p.name AS province_name, p.full_name AS province_full_name,
+                u.id AS creator_id, u.first_name, u.last_name, u.username
+            FROM events e
+            LEFT JOIN event_locations el ON e.id_event_location = el.id
+            LEFT JOIN locations l ON el.id_location = l.id
+            LEFT JOIN provinces p ON l.id_province = p.id
+            LEFT JOIN users u ON e.id_creator_user = u.id
+            WHERE e.name ILIKE $1
+            ORDER BY e.id ASC
+        `;
         
-        if (resultadoPg.rowCount === 0) {
-            return res.status(StatusCodes.NOT_FOUND).send(`No se encontró un evento con el nombre ${name}`);
+        const result = await client.query(sqlQuery, [`%${name}%`]);
+
+        if (result.rows.length === 0) {
+            return res.status(StatusCodes.OK).json({
+                success: true,
+                events: []
+            });
         }
-        res.status(StatusCodes.OK).json(resultadoPg.rows[0]);
+
+       
+        const eventsWithTags = await Promise.all(
+            result.rows.map(async (event) => {
+                const tagsQuery = `
+                    SELECT t.id, t.name 
+                    FROM Event_Tags et 
+                    JOIN Tags t ON et.id_tag = t.id 
+                    WHERE et.id_event = $1
+                `;
+                const tagsResult = await client.query(tagsQuery, [event.id]);
+                
+                return {
+                    id: event.id,
+                    name: event.name,
+                    description: event.description,
+                    start_date: event.start_date,
+                    duration_in_minutes: event.duration_in_minutes,
+                    price: event.price,
+                    enabled_for_enrollment: event.enabled_for_enrollment,
+                    max_assistance: event.max_assistance,
+                    id_creator_user: event.creator_id,
+                    event_location: {
+                        id: event.event_location_id,
+                        id_location: event.location_id,
+                        name: event.location_name,
+                        full_address: event.full_address,
+                        max_capacity: event.max_capacity,
+                        latitude: event.latitude,
+                        longitude: event.longitude,
+                        id_creator_user: event.creator_id,
+                        location: {
+                            id: event.location_id,
+                            name: event.locality_name,
+                            id_province: event.province_id,
+                            latitude: event.latitude,
+                            longitude: event.longitude,
+                            province: {
+                                id: event.province_id,
+                                name: event.province_name,
+                                full_name: event.province_full_name,
+                                latitude: null,
+                                longitude: null,
+                                display_order: null
+                            }
+                        },
+                        creator_user: {
+                            id: event.creator_id,
+                            first_name: event.first_name,
+                            last_name: event.last_name,
+                            username: event.username,
+                            password: '******'
+                        }
+                    },
+                    tags: tagsResult.rows,
+                    creator_user: {
+                        id: event.creator_id,
+                        first_name: event.first_name,
+                        last_name: event.last_name,
+                        username: event.username,
+                        password: '******'
+                    }
+                };
+            })
+        );
+
+        res.status(StatusCodes.OK).json({
+            success: true,
+            events: eventsWithTags
+        });
+
     } catch (error) {
-        console.error(error);
-        res.status(StatusCodes.INTERNAL_SERVER_ERROR).send('Error interno del servidor');
+        console.error('Error buscando eventos por nombre:', error);
+        res.status(StatusCodes.INTERNAL_SERVER_ERROR).json({
+            success: false,
+            message: 'Error interno del servidor'
+        });
     }
 };
+
 
 export const getEventByStartDate = async (req, res) => {
     const { startdate } = req.params;
     const client = pool;
 
     try {
-        await client.connect();
-        const sqlQuery = 'SELECT * FROM Events WHERE startdate = $1';
-        const values = [startdate];
-        const resultadoPg = await client.query(sqlQuery, values);
+       
+
+        const sqlQuery = `
+            SELECT 
+                e.id, e.name, e.description, e.start_date, e.duration_in_minutes,
+                e.price, e.enabled_for_enrollment, e.max_assistance,
+                el.id AS event_location_id, el.name AS location_name, 
+                el.full_address, el.latitude, el.longitude, el.max_capacity,
+                l.id AS location_id, l.name AS locality_name,
+                p.id AS province_id, p.name AS province_name, p.full_name AS province_full_name,
+                u.id AS creator_id, u.first_name, u.last_name, u.username
+            FROM events e
+            LEFT JOIN event_locations el ON e.id_event_location = el.id
+            LEFT JOIN locations l ON el.id_location = l.id
+            LEFT JOIN provinces p ON l.id_province = p.id
+            LEFT JOIN users u ON e.id_creator_user = u.id
+            WHERE DATE(e.start_date) = $1
+            ORDER BY e.id ASC
+        `;
         
-        if (resultadoPg.rowCount === 0) {
-            return res.status(StatusCodes.NOT_FOUND).send(`No se encontró un evento con fecha de inicio ${startdate}`);
+        const result = await client.query(sqlQuery, [startdate]);
+
+        if (result.rows.length === 0) {
+            return res.status(StatusCodes.OK).json({
+                success: true,
+                events: []
+            });
         }
-        res.status(StatusCodes.OK).json(resultadoPg.rows[0]);
+
+        
+        const eventsWithTags = await Promise.all(
+            result.rows.map(async (event) => {
+                const tagsQuery = `
+                    SELECT t.id, t.name 
+                    FROM Event_Tags et 
+                    JOIN Tags t ON et.id_tag = t.id 
+                    WHERE et.id_event = $1
+                `;
+                const tagsResult = await client.query(tagsQuery, [event.id]);
+                
+                return {
+                    id: event.id,
+                    name: event.name,
+                    description: event.description,
+                    start_date: event.start_date,
+                    duration_in_minutes: event.duration_in_minutes,
+                    price: event.price,
+                    enabled_for_enrollment: event.enabled_for_enrollment,
+                    max_assistance: event.max_assistance,
+                    id_creator_user: event.creator_id,
+                    event_location: {
+                        id: event.event_location_id,
+                        id_location: event.location_id,
+                        name: event.location_name,
+                        full_address: event.full_address,
+                        max_capacity: event.max_capacity,
+                        latitude: event.latitude,
+                        longitude: event.longitude,
+                        id_creator_user: event.creator_id,
+                        location: {
+                            id: event.location_id,
+                            name: event.locality_name,
+                            id_province: event.province_id,
+                            latitude: event.latitude,
+                            longitude: event.longitude,
+                            province: {
+                                id: event.province_id,
+                                name: event.province_name,
+                                full_name: event.province_full_name,
+                                latitude: null,
+                                longitude: null,
+                                display_order: null
+                            }
+                        },
+                        creator_user: {
+                            id: event.creator_id,
+                            first_name: event.first_name,
+                            last_name: event.last_name,
+                            username: event.username,
+                            password: '******'
+                        }
+                    },
+                    tags: tagsResult.rows,
+                    creator_user: {
+                        id: event.creator_id,
+                        first_name: event.first_name,
+                        last_name: event.last_name,
+                        username: event.username,
+                        password: '******'
+                    }
+                };
+            })
+        );
+
+        res.status(StatusCodes.OK).json({
+            success: true,
+            events: eventsWithTags
+        });
+
     } catch (error) {
-        console.error(error);
-        res.status(StatusCodes.INTERNAL_SERVER_ERROR).send('Error interno del servidor');
+        console.error('Error buscando eventos por fecha:', error);
+        res.status(StatusCodes.INTERNAL_SERVER_ERROR).json({
+            success: false,
+            message: 'Error interno del servidor'
+        });
     }
 };
+
 
 export const getEventByTag = async (req, res) => {
     const { tag } = req.params;
     const client = pool;
 
     try {
-        await client.connect();
-        const sqlQuery = 'SELECT * FROM Events WHERE tag = $1';
-        const values = [tag];
-        const resultadoPg = await client.query(sqlQuery, values);
         
-        if (resultadoPg.rowCount === 0) {
-            return res.status(StatusCodes.NOT_FOUND).send(`No se encontró un evento con la etiqueta ${tag}`);
+
+        const sqlQuery = `
+            SELECT DISTINCT
+                e.id, e.name, e.description, e.start_date, e.duration_in_minutes,
+                e.price, e.enabled_for_enrollment, e.max_assistance,
+                el.id AS event_location_id, el.name AS location_name, 
+                el.full_address, el.latitude, el.longitude, el.max_capacity,
+                l.id AS location_id, l.name AS locality_name,
+                p.id AS province_id, p.name AS province_name, p.full_name AS province_full_name,
+                u.id AS creator_id, u.first_name, u.last_name, u.username
+            FROM events e
+            LEFT JOIN event_locations el ON e.id_event_location = el.id
+            LEFT JOIN locations l ON el.id_location = l.id
+            LEFT JOIN provinces p ON l.id_province = p.id
+            LEFT JOIN users u ON e.id_creator_user = u.id
+            JOIN Event_Tags et ON e.id = et.id_event
+            JOIN Tags t ON et.id_tag = t.id
+            WHERE t.name ILIKE $1
+            ORDER BY e.id ASC
+        `;
+        
+        const result = await client.query(sqlQuery, [`%${tag}%`]);
+
+        if (result.rows.length === 0) {
+            return res.status(StatusCodes.OK).json({
+                success: true,
+                events: []
+            });
         }
-        res.status(StatusCodes.OK).json(resultadoPg.rows[0]);
+
+       
+        const eventsWithTags = await Promise.all(
+            result.rows.map(async (event) => {
+                const tagsQuery = `
+                    SELECT t.id, t.name 
+                    FROM Event_Tags et 
+                    JOIN Tags t ON et.id_tag = t.id 
+                    WHERE et.id_event = $1
+                `;
+                const tagsResult = await client.query(tagsQuery, [event.id]);
+                
+                return {
+                    id: event.id,
+                    name: event.name,
+                    description: event.description,
+                    start_date: event.start_date,
+                    duration_in_minutes: event.duration_in_minutes,
+                    price: event.price,
+                    enabled_for_enrollment: event.enabled_for_enrollment,
+                    max_assistance: event.max_assistance,
+                    id_creator_user: event.creator_id,
+                    event_location: {
+                        id: event.event_location_id,
+                        id_location: event.location_id,
+                        name: event.location_name,
+                        full_address: event.full_address,
+                        max_capacity: event.max_capacity,
+                        latitude: event.latitude,
+                        longitude: event.longitude,
+                        id_creator_user: event.creator_id,
+                        location: {
+                            id: event.location_id,
+                            name: event.locality_name,
+                            id_province: event.province_id,
+                            latitude: event.latitude,
+                            longitude: event.longitude,
+                            province: {
+                                id: event.province_id,
+                                name: event.province_name,
+                                full_name: event.province_full_name,
+                                latitude: null,
+                                longitude: null,
+                                display_order: null
+                            }
+                        },
+                        creator_user: {
+                            id: event.creator_id,
+                            first_name: event.first_name,
+                            last_name: event.last_name,
+                            username: event.username,
+                            password: '******'
+                        }
+                    },
+                    tags: tagsResult.rows,
+                    creator_user: {
+                        id: event.creator_id,
+                        first_name: event.first_name,
+                        last_name: event.last_name,
+                        username: event.username,
+                        password: '******'
+                    }
+                };
+            })
+        );
+
+        res.status(StatusCodes.OK).json({
+            success: true,
+            events: eventsWithTags
+        });
+
     } catch (error) {
-        console.error(error);
-        res.status(StatusCodes.INTERNAL_SERVER_ERROR).send('Error interno del servidor');
+        console.error('Error buscando eventos por tag:', error);
+        res.status(StatusCodes.INTERNAL_SERVER_ERROR).json({
+            success: false,
+            message: 'Error interno del servidor'
+        });
     }
 };
   

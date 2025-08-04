@@ -30,11 +30,11 @@ app.use((err, req, res, next) => {
 
 
 app.get('/', (req, res) => {
-    res.send('Servidor Express funcionando');
+    res.send('Servidor Express funcionando en perfectas condiciones');
 });
 
 
 app.listen(PORT, () => {
-    console.log(`Servidor escuchando en puerto ${PORT}`);
+    console.log(`Todo Listo! Servidor escuchando en puerto ${PORT}`);
 });
 

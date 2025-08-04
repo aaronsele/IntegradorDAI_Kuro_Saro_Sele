@@ -4,6 +4,7 @@
   "description": "",
   "main": "index.js",
   "type": "module",
+  "authors": "Fran S, Aaron S y Fede K",
   "scripts": {
     "start": "node index.js",
     "dev": "nodemon index.js"
