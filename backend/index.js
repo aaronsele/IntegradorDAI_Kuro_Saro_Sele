@@ -1,40 +1,26 @@
-import express from 'express';
-import dotenv from 'dotenv';
-import cors from 'cors';
-import apiRoutes from './routes/api.js';
-
-
-dotenv.config();
+import 'dotenv/config';
+import express from "express";
+import cors from "cors";
+import EventRouter from "./src/controllers/event-controller.js";
+import UserRouter from "./src/controllers/user-controller.js";
+import AuthRouter from "./src/controllers/auth-controller.js";
+import EventLocationRouter from "./src/controllers/event-location-controller.js";
 
 const app = express();
-const PORT = process.env.PORT || 3000;
+const port = 3000;
 
-
-const corsOptions = process.env.NODE_ENV === 'production'
-  ? { origin: process.env.FRONTEND_URL, optionsSuccessStatus: 200 }
-  : {};
-app.use(cors(corsOptions));
+app.use(cors());
 app.use(express.json());
 
-
-app.use('/api', apiRoutes);
-
-
-app.use((err, req, res, next) => {
-    console.error('Error:', err);
-    res.status(err.status || 500).json({
-        success: false,
-        message: err.message || 'Error interno del servidor'
-    });
-});
-
-
 app.get('/', (req, res) => {
-    res.send('Servidor Express funcionando en perfectas condiciones');
+  res.send('¡Servidor funcionando correctamente!');
 });
 
+app.use('/api/event', EventRouter);
+app.use('/api/user', UserRouter);
+app.use('/api/auth', AuthRouter);
+app.use('/api/event-location', EventLocationRouter);
 
-app.listen(PORT, () => {
-    console.log(`Todo Listo! Servidor escuchando en puerto ${PORT}`);
+app.listen(port, () => {
+  console.log(`Server listening on port ${port}`);
 });
-
