@@ -1,23 +1,6 @@
+import { createClient } from '@supabase/supabase-js';
 import dotenv from 'dotenv';
-
 dotenv.config();
 
-const requiredEnv = ['DB_HOST', 'DB_PORT', 'DB_NAME', 'DB_USER', 'DB_PASSWORD'];
-requiredEnv.forEach((envVar) => {
-    if (!process.env[envVar]) {
-        throw new Error(`Falta la variable de entorno requerida: ${envVar}`);
-    }
-    else {
-        console.log(`VARIABLE ${envVar} OK`)
-    }
-});
-
-const config = {
-    host: process.env.DB_HOST,
-    port: process.env.DB_PORT,
-    database: process.env.DB_NAME,
-    user: process.env.DB_USER,
-    password: process.env.DB_PASSWORD
-};
-
-export default config; 
+const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY);
+export default supabase;

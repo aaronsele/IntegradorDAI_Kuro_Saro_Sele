@@ -1,10 +1,10 @@
 import pkg from 'pg';
 import { StatusCodes } from 'http-status-codes';
 import { validaciones } from '../helpers/validaciones/validaciones-helper.js';
-import config from '../../configs/db-configs.js';
+import supabase from '../../configs/db-configs.js';
 
 const { Pool } = pkg;
-const pool = new Pool(config);
+const pool = new Pool(supabase);
 const validacionesInstance = new validaciones();
 
 export const getHello = (req, res) => {

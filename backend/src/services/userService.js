@@ -1,10 +1,10 @@
 import pkg from 'pg';
 import bcrypt from 'bcryptjs';
 import { StatusCodes } from 'http-status-codes';
-import config from '../../configs/db-configs.js';
+import supabase from '../../configs/db-configs';
 
 const { Pool } = pkg;
-const pool = new Pool(config);
+const pool = new Pool(supabase);
 
 export default class userService {
     static async registerUser(username, password, first_name, last_name) {
