@@ -22,6 +22,7 @@ export default class EventRepository {
       ORDER BY e.start_date ASC
       LIMIT $1 OFFSET $2
     `;
+    console.log("ACA")
     const result = await pool.query(sql, [limit, offset]);
     return result.rows;
     } 

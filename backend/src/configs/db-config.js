@@ -11,5 +11,5 @@ const DBconfig = {
 };
 
 const pool = new Pool(DBconfig);
-
+console.log('DBconfig', DBconfig)
 export default pool;
